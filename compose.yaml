@@ -1,0 +1,114 @@
+name: vremya
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "5" }
+
+x-backend: &backend
+  build: ./backend
+  logging: *logging
+  environment: &backend-env
+    APP_ENV: ${APP_ENV:-prod}
+    DATABASE_URL: postgresql+asyncpg://vremya:${POSTGRES_PASSWORD:-vremya}@postgres:5432/vremya
+    MAX_BOT_TOKEN: ${MAX_BOT_TOKEN:-}
+    MAX_WEBHOOK_SECRET: ${MAX_WEBHOOK_SECRET:-}
+    MAX_BOT_USERNAME: ${MAX_BOT_USERNAME:-}
+    PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
+    TEST_ACCOUNTS: ${TEST_ACCOUNTS:-}
+    CERT_SIGN_KEY_PATH: /data/signing/sign.key
+    CERT_SIGN_CERT_PATH: /data/signing/sign.crt
+  volumes:
+    - signing:/data/signing
+
+services:
+  postgres:
+    image: postgres:16
+    logging: *logging
+    environment:
+      POSTGRES_USER: vremya
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vremya}
+      POSTGRES_DB: vremya
+    ports:
+      - "127.0.0.1:54330:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vremya -d vremya"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  migrate:
+    <<: *backend
+    command:
+      - sh
+      - -c
+      - >-
+        alembic upgrade head &&
+        python -m app.cli ensure-signing-cert /data/signing &&
+        python -m app.cli seed-auto
+    environment:
+      <<: *backend-env
+      SEED_DEMO: ${SEED_DEMO:-true}
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *backend
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.worker.main"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./app
+      args:
+        MAX_BOT_USERNAME: ${MAX_BOT_USERNAME:-}
+        SEED_DEMO: ${SEED_DEMO:-true}
+    logging: *logging
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    ports:
+      - "${WEB_HTTP_BIND:-127.0.0.1:8080}:80"
+      - "${WEB_HTTPS_BIND:-127.0.0.1:8443}:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  bot-setup:
+    <<: *backend
+    command: ["python", "-m", "app.cli", "setup-webhook", "--wait", "300"]
+    restart: "no"
+    depends_on:
+      web:
+        condition: service_started
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
+  signing:

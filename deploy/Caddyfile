@@ -1,0 +1,30 @@
+{$SITE_ADDRESS::80} {
+	encode zstd gzip
+
+	@backend path /api/* /max/webhook /check/* /files/* /healthz
+	handle @backend {
+		request_header -X-Dev-User
+		request_body {
+			max_size 3MB
+		}
+		reverse_proxy api:8000
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+	@html path / /index.html
+	header @html Cache-Control "no-cache"
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+}

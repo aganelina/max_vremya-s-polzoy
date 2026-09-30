@@ -1,0 +1,125 @@
+config_version: "1.0"
+
+solution:
+  id: "CUrt"
+  name: "Время с пользой"
+
+base_url: "https://max-bot.centraluniversity.team/api/v1"
+
+auth:
+  header: "Authorization: Bearer <токен тестовой учётной записи>"
+  errors: { unauthorized: 401, forbidden: 403 }
+  error_body: { code: "string" }
+
+roles:
+  - id: student
+    description: "Студентка Алина (демо): подбор, запись, отметка, справка"
+    test_account: { max_user_id: 1, token_env: "TEST_ACCOUNTS" }
+  - id: coordinator
+    description: "Координатор Гульнара, организация «Книжный мост (демо)»"
+    test_account: { max_user_id: 900206, token_env: "TEST_ACCOUNTS" }
+  - id: newbie
+    description: "Камила (демо): участница без доступа к кабинету координатора"
+    test_account: { max_user_id: 900102, token_env: "TEST_ACCOUNTS" }
+
+test_data:
+  loader: "docker compose exec api python -m app.cli seed-demo"
+  deal_booked_by_student: 4fd7f426-8139-57e1-a614-b3f32f105455
+  deal_free_tomorrow: 969f060c-88b0-5d9c-a47e-d7daf4bcf8f1
+  coordinator_shift: f55bc37e-f6ca-55be-ad34-254aa5f73bb2
+
+required_checks:
+  - id: profile
+    method: GET
+    path: /me
+    role: student
+    expect_status: [200]
+    response: { content_type: application/json, required_fields: [id, firstName, onboarded, university, district, interests, stats, roles] }
+
+  - id: search
+    method: GET
+    path: /search
+    query: { duration_min: 120, when: tomorrow, from: campus }
+    role: student
+    expect_status: [200]
+    response: { content_type: application/json, required_fields: [window, items, counts] }
+
+  - id: search_invalid_params
+    method: GET
+    path: /search
+    query: { duration_min: 7, when: tomorrow, from: campus }
+    role: student
+    expect_status: [422]
+    response: { content_type: application/json, required_fields: [code] }
+
+  - id: deal_card
+    method: GET
+    path: /deals/969f060c-88b0-5d9c-a47e-d7daf4bcf8f1
+    role: student
+    expect_status: [200]
+    response: { content_type: application/json, required_fields: [id, title, org, startsAt, endsAt, hours, address, capacity, taken, cancelUntil, checkInFrom, checkInTo, instructionsAt, myBooking] }
+
+  - id: book_deal
+    method: POST
+    path: /deals/969f060c-88b0-5d9c-a47e-d7daf4bcf8f1/bookings
+    body: {}
+    role: student
+    expect_status: [200]
+    response: { content_type: application/json, required_fields: [id, dealId, status] }
+
+  - id: my_deals
+    method: GET
+    path: /me/deals
+    role: student
+    expect_status: [200]
+    response: { content_type: application/json, required_fields: [upcoming, history] }
+
+  - id: certificate
+    method: GET
+    path: /me/certificate
+    query: { period: semester }
+    role: student
+    expect_status: [200]
+    response: { content_type: application/json, required_fields: [period, rows, total, verifyCode, verifyUrl] }
+
+  - id: unknown_deal
+    method: GET
+    path: /deals/00000000-0000-0000-0000-000000000000
+    role: student
+    expect_status: [404]
+    response: { content_type: application/json, required_fields: [code] }
+
+  - id: no_auth
+    method: GET
+    path: /me
+    role: none
+    expect_status: [401]
+    response: { content_type: application/json, required_fields: [code] }
+
+  - id: coordinator_home
+    method: GET
+    path: /coord/home
+    role: coordinator
+    expect_status: [200]
+    response: { content_type: application/json, required_fields: [next, shifts] }
+
+  - id: attendance
+    method: GET
+    path: /coord/shifts/f55bc37e-f6ca-55be-ad34-254aa5f73bb2/attendance
+    role: coordinator
+    expect_status: [200]
+    response: { content_type: application/json, required_fields: [shift, participants] }
+
+  - id: checkin_code
+    method: GET
+    path: /coord/shifts/f55bc37e-f6ca-55be-ad34-254aa5f73bb2/code
+    role: coordinator
+    expect_status: [200]
+    response: { content_type: application/json, required_fields: [code, qrPayload, expiresAt] }
+
+  - id: coordinator_only
+    method: GET
+    path: /coord/home
+    role: newbie
+    expect_status: [403]
+    response: { content_type: application/json, required_fields: [code] }
